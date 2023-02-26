@@ -50,7 +50,7 @@ def make_parser():
         "--device",
         default="cpu",
         type=str,
-        help="device to run our model, can either be cpu or gpu",
+        help="device to run our model, can either be cpu or gpu or mps",
     )
     parser.add_argument("--conf", default=0.3, type=float, help="test conf")
     parser.add_argument("--nms", default=0.3, type=float, help="test nms threshold")
@@ -153,14 +153,20 @@ class Predictor(object):
             if self.fp16:
                 img = img.half()  # to FP16
 
+        elif self.device == "mps":
+            img = img.to(torch.device("mps"))
+
         with torch.no_grad():
             t0 = time.time()
             outputs = self.model(img)
             if self.decoder is not None:
                 outputs = self.decoder(outputs, dtype=outputs.type())
             outputs = postprocess(
-                outputs, self.num_classes, self.confthre,
-                self.nmsthre, class_agnostic=True
+                outputs,
+                self.num_classes,
+                self.confthre,
+                self.nmsthre,
+                class_agnostic=True,
             )
             logger.info("Infer time: {:.4f}s".format(time.time() - t0))
         return outputs, img_info
@@ -201,9 +207,9 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
             save_file_name = os.path.join(save_folder, os.path.basename(image_name))
             logger.info("Saving detection result in {}".format(save_file_name))
             cv2.imwrite(save_file_name, result_image)
-        ch = cv2.waitKey(0)
-        if ch == 27 or ch == ord("q") or ch == ord("Q"):
-            break
+        # ch = cv2.waitKey(0)
+        break
+        # if ch == 27 or ch == ord("q") or ch == ord("Q"):
 
 
 def imageflow_demo(predictor, vis_folder, current_time, args):
@@ -272,6 +278,9 @@ def main(exp, args):
         model.cuda()
         if args.fp16:
             model.half()  # to FP16
+    elif args.device == "mps":
+        model.to(torch.device("mps"))
+
     model.eval()
 
     if not args.trt:
@@ -303,8 +312,14 @@ def main(exp, args):
         decoder = None
 
     predictor = Predictor(
-        model, exp, COCO_CLASSES, trt_file, decoder,
-        args.device, args.fp16, args.legacy,
+        model,
+        exp,
+        COCO_CLASSES,
+        trt_file,
+        decoder,
+        args.device,
+        args.fp16,
+        args.legacy,
     )
     current_time = time.localtime()
     if args.demo == "image":

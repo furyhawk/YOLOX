@@ -48,7 +48,7 @@ class Trainer:
         self.is_distributed = get_world_size() > 1
         self.rank = get_rank()
         self.local_rank = get_local_rank()
-        self.device = "cuda:{}".format(self.local_rank)
+        self.device = "cpu" #cuda:{}".format(self.local_rank)
         self.use_model_ema = exp.ema
         self.save_history_ckpt = exp.save_history_ckpt
 
@@ -95,7 +95,12 @@ class Trainer:
     def train_one_iter(self):
         iter_start_time = time.time()
 
-        inps, targets = self.prefetcher.next()
+        try:
+            inps, targets, _, _ = next(iter(self.prefetcher))
+        except StopIteration:
+            inps = None
+            targets = None
+        # inps, targets = next(iter(self.prefetcher))
         inps = inps.to(self.data_type)
         targets = targets.to(self.data_type)
         targets.requires_grad = False
@@ -132,7 +137,7 @@ class Trainer:
         logger.info("exp value:\n{}".format(self.exp))
 
         # model related init
-        torch.cuda.set_device(self.local_rank)
+        # torch.cuda.set_device(self.local_rank)
         model = self.exp.get_model()
         logger.info(
             "Model Summary: {}".format(get_model_info(model, self.exp.test_size))
@@ -154,7 +159,7 @@ class Trainer:
             cache_img=self.args.cache,
         )
         logger.info("init prefetcher, this might take one minute or less...")
-        self.prefetcher = DataPrefetcher(self.train_loader)
+        self.prefetcher = self.train_loader #DataPrefetcher(self.train_loader)
         # max_iter means iters per epoch
         self.max_iter = len(self.train_loader)
 
@@ -275,10 +280,10 @@ class Trainer:
             self.meter.clear_meters()
 
         # random resizing
-        if (self.progress_in_iter + 1) % 10 == 0:
-            self.input_size = self.exp.random_resize(
-                self.train_loader, self.epoch, self.rank, self.is_distributed
-            )
+        # if (self.progress_in_iter + 1) % 10 == 0:
+        #     self.input_size = self.exp.random_resize(
+        #         self.train_loader, self.epoch, self.rank, self.is_distributed
+        #     )
 
     @property
     def progress_in_iter(self):

@@ -175,9 +175,7 @@ class YOLOXHead(nn.Module):
                 if self.use_l1:
                     batch_size = reg_output.shape[0]
                     hsize, wsize = reg_output.shape[-2:]
-                    reg_output = reg_output.view(
-                        batch_size, 1, 4, hsize, wsize
-                    )
+                    reg_output = reg_output.view(batch_size, 1, 4, hsize, wsize)
                     reg_output = reg_output.permute(0, 1, 3, 4, 2).reshape(
                         batch_size, -1, 4
                     )
@@ -224,9 +222,7 @@ class YOLOXHead(nn.Module):
             self.grids[k] = grid
 
         output = output.view(batch_size, 1, n_ch, hsize, wsize)
-        output = output.permute(0, 1, 3, 4, 2).reshape(
-            batch_size, hsize * wsize, -1
-        )
+        output = output.permute(0, 1, 3, 4, 2).reshape(batch_size, hsize * wsize, -1)
         grid = grid.view(1, -1, 2)
         output[..., :2] = (output[..., :2] + grid) * stride
         output[..., 2:4] = torch.exp(output[..., 2:4]) * stride
@@ -242,14 +238,22 @@ class YOLOXHead(nn.Module):
             shape = grid.shape[:2]
             strides.append(torch.full((*shape, 1), stride))
 
-        grids = torch.cat(grids, dim=1).type(dtype)
-        strides = torch.cat(strides, dim=1).type(dtype)
+        if dtype.startswith("torch.mps"):
+            grids = torch.cat(grids, dim=1).to("mps")
+            strides = torch.cat(strides, dim=1).to("mps")
+            outputs = outputs.to("mps")
+        else:
+            grids = torch.cat(grids, dim=1).type(dtype)
+            strides = torch.cat(strides, dim=1).type(dtype)
 
-        outputs = torch.cat([
-            (outputs[..., 0:2] + grids) * strides,
-            torch.exp(outputs[..., 2:4]) * strides,
-            outputs[..., 4:]
-        ], dim=-1)
+        outputs = torch.cat(
+            [
+                (outputs[..., 0:2] + grids) * strides,
+                torch.exp(outputs[..., 2:4]) * strides,
+                outputs[..., 4:],
+            ],
+            dim=-1,
+        )
         return outputs
 
     def get_losses(
@@ -434,7 +438,6 @@ class YOLOXHead(nn.Module):
         obj_preds,
         mode="gpu",
     ):
-
         if mode == "cpu":
             print("-----------Using CPU for the Current Batch-------------")
             gt_bboxes_per_image = gt_bboxes_per_image.cpu().float()
@@ -462,10 +465,9 @@ class YOLOXHead(nn.Module):
 
         pair_wise_ious = bboxes_iou(gt_bboxes_per_image, bboxes_preds_per_image, False)
 
-        gt_cls_per_image = (
-            F.one_hot(gt_classes.to(torch.int64), self.num_classes)
-            .float()
-        )
+        gt_cls_per_image = F.one_hot(
+            gt_classes.to(torch.int64), self.num_classes
+        ).float()
         pair_wise_ious_loss = -torch.log(pair_wise_ious + 1e-8)
 
         if mode == "cpu":
@@ -478,7 +480,7 @@ class YOLOXHead(nn.Module):
             pair_wise_cls_loss = F.binary_cross_entropy(
                 cls_preds_.unsqueeze(0).repeat(num_gt, 1, 1),
                 gt_cls_per_image.unsqueeze(1).repeat(1, num_in_boxes_anchor, 1),
-                reduction="none"
+                reduction="none",
             ).sum(-1)
         del cls_preds_
 
@@ -523,8 +525,12 @@ class YOLOXHead(nn.Module):
         the number of candidate anchors so that the GPU memory is saved.
         """
         expanded_strides_per_image = expanded_strides[0]
-        x_centers_per_image = ((x_shifts[0] + 0.5) * expanded_strides_per_image).unsqueeze(0)
-        y_centers_per_image = ((y_shifts[0] + 0.5) * expanded_strides_per_image).unsqueeze(0)
+        x_centers_per_image = (
+            (x_shifts[0] + 0.5) * expanded_strides_per_image
+        ).unsqueeze(0)
+        y_centers_per_image = (
+            (y_shifts[0] + 0.5) * expanded_strides_per_image
+        ).unsqueeze(0)
 
         # in fixed center
         center_radius = 1.5
@@ -554,9 +560,7 @@ class YOLOXHead(nn.Module):
         topk_ious, _ = torch.topk(pair_wise_ious, n_candidate_k, dim=1)
         dynamic_ks = torch.clamp(topk_ious.sum(1).int(), min=1)
         for gt_idx in range(num_gt):
-            _, pos_idx = torch.topk(
-                cost[gt_idx], k=dynamic_ks[gt_idx], largest=False
-            )
+            _, pos_idx = torch.topk(cost[gt_idx], k=dynamic_ks[gt_idx], largest=False)
             matching_matrix[gt_idx][pos_idx] = 1
 
         del topk_ious, dynamic_ks, pos_idx
